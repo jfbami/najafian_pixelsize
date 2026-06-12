@@ -1,0 +1,44 @@
+# Google Drive accounts — each owner shares their root folder with the
+# service account email (one click per person).
+accounts:
+  - name: frida
+    root_folder_id: "FILL_IN"
+  - name: zour
+    root_folder_id: "FILL_IN"
+  - name: lab
+    root_folder_id: "FILL_IN"
+
+output:
+  folder_id: "FILL_IN"
+  results_filename: "calibration_results.csv"
+  review_filename: "review_queue.csv"
+
+state:
+  db_path: "state.db"
+  temp_dir: "temp"
+
+credentials:
+  service_account_json: "service_account.json"
+
+# Physical calibration standard — anchors every measurement. Do not change
+# without a new physical grating standard.
+calibration:
+  physical_pitch_um: 0.463
+  grid_standard_name: "TedPella Prod. No. 607"
+
+# FFT detection thresholds (validated on reference data: calibration scored
+# ~0.98, the strongest tissue frame scored well below).
+detection:
+  confidence_threshold: 0.60
+  squareness_threshold: 0.90
+  orthogonality_tolerance_deg: 12.0
+
+# Calibration-to-tissue matching by magnification and acquisition date.
+matching:
+  max_date_window_days: 30
+  auto_use_within_days: 7
+
+agent:
+  model: "claude-sonnet-4-6"
+  max_tokens: 4096
+  batch_size: 10

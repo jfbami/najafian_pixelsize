@@ -1,0 +1,18 @@
+# Core measurement (no GPU, no network) — validated locally
+numpy>=1.24
+pillow>=10.0
+scipy>=1.10
+
+# Learned detector + training (run on Colab GPU)
+torch>=2.1
+torchvision>=0.16
+
+# Google Drive access (service account)
+google-api-python-client>=2.100
+google-auth>=2.23
+
+# Agent orchestration
+anthropic>=0.40
+
+# Config
+pyyaml>=6.0
