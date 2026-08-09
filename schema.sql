@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS calibration_cache (
     PRIMARY KEY (magnification, calibration_date, folder_id, frame_index)
 );
 
+-- One open review row per (case, reason): re-flagging a case updates the
+-- existing entry instead of stacking duplicates in the queue.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_case_reason
+    ON review_queue(case_id, reason);
+
 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
 CREATE INDEX IF NOT EXISTS idx_cal_cache_lookup
     ON calibration_cache(magnification, calibration_date);
