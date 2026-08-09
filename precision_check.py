@@ -1,66 +1,86 @@
-"""Quantify measurement precision by sampling regions across the grid image.
+"""Quantify measurement precision by sampling regions across a grid image.
 
 Mirrors the manual SOP ("sample widely across the whole image") and reports the
 spread of the per-region nm/pixel estimates as an empirical precision bound.
+
+Precision is not accuracy: this measures repeatability only. The grating's own
+ruling tolerance (`calibration.PITCH_RELATIVE_UNCERTAINTY`) is a systematic
+floor underneath every number here, and no amount of region averaging reduces
+it.
+
+Usage:
+    python precision_check.py PATH/TO/calibration.tif [--tile 1600]
 """
 
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from src import calibration
-from src.measurer import (
-    _cluster_into_axes,
-    _extract_peaks,
-    _fundamental_spacing,
-    _windowed_power_spectrum,
-)
+from src.imaging import load_grayscale
+from src.measurer import measure_array
 
-Image.MAX_IMAGE_PIXELS = None
-
-FRAME = Path(r"C:\Users\jfbaa\OneDrive\Documents\test\17E00231\17E00231-1\17E00231-1_115.tif")
-TILE = 1600
+DEFAULT_TILE = 1600
 
 
 def measure_region(region: np.ndarray) -> float:
-    spectrum = _windowed_power_spectrum(region)
-    height, width = region.shape
-    axes = _cluster_into_axes(_extract_peaks(spectrum, width, height))
-    spacings = [_fundamental_spacing(axis) for axis in axes[:2]]
-    return float(np.mean(spacings))
+    """nm/pixel for one tile, or NaN if the tile is not measurable."""
+    return measure_array(np.ascontiguousarray(region)).nm_per_pixel
+
+
+def tile_positions(height: int, width: int, tile: int) -> dict[str, tuple[int, int]]:
+    return {
+        "top-left": (0, 0),
+        "top-right": (0, width - tile),
+        "bottom-left": (height - tile, 0),
+        "bottom-right": (height - tile, width - tile),
+        "center": ((height - tile) // 2, (width - tile) // 2),
+    }
 
 
 def main() -> None:
-    with Image.open(FRAME) as handle:
-        image = np.asarray(handle.convert("L"), dtype=np.float32)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("frame", type=Path, help="calibration TIFF to profile")
+    parser.add_argument("--tile", type=int, default=DEFAULT_TILE)
+    args = parser.parse_args()
+
+    image = load_grayscale(str(args.frame))
     height, width = image.shape
+    tile = min(args.tile, height, width)
+    if tile < args.tile:
+        print(f"note: tile reduced to {tile}px to fit a {width}x{height} frame")
 
-    positions = {
-        "top-left": (0, 0),
-        "top-right": (0, width - TILE),
-        "bottom-left": (height - TILE, 0),
-        "bottom-right": (height - TILE, width - TILE),
-        "center": ((height - TILE) // 2, (width - TILE) // 2),
-    }
+    whole = measure_array(image)
+    print(f"\nWhole frame: {whole.nm_per_pixel:.4f} nm/px "
+          f"(D = {whole.pixels_per_space:.4f} px, valid={whole.valid})")
+    if whole.warning:
+        print(f"  warning: {whole.warning}")
 
-    spacings = []
-    print(f"Region spacing (D) over {TILE}x{TILE} tiles:")
-    for name, (top, left) in positions.items():
-        region = image[top : top + TILE, left : left + TILE]
-        spacing = measure_region(region)
-        spacings.append(spacing)
-        print(f"  {name:13s}: D = {spacing:8.4f} px   ({calibration.nm_per_pixel(spacing):.4f} nm/px)")
+    print(f"\nPer-region nm/pixel over {tile}x{tile} tiles:")
+    values: list[float] = []
+    for name, (top, left) in tile_positions(height, width, tile).items():
+        value = measure_region(image[top : top + tile, left : left + tile])
+        marker = "" if np.isfinite(value) else "   (not measurable)"
+        print(f"  {name:13s}: {value:9.4f} nm/px{marker}")
+        if np.isfinite(value):
+            values.append(value)
 
-    spacings = np.array(spacings)
-    nm = np.array([calibration.nm_per_pixel(s) for s in spacings])
-    print(f"\nAll tiles  : median D {np.median(spacings):.4f} px   std {spacings.std():.4f} px")
+    if len(values) < 2:
+        print("\nToo few measurable regions to estimate precision.")
+        return
 
-    inliers = spacings[np.abs(spacings - np.median(spacings)) < 5.0]
-    nm_inliers = np.array([calibration.nm_per_pixel(s) for s in inliers])
-    print(f"Inliers ({len(inliers)}/{len(spacings)}): D mean {inliers.mean():.4f} px   std {inliers.std():.4f} px   range {np.ptp(inliers):.4f} px")
-    print(f"            nm/px mean {nm_inliers.mean():.4f}   std {nm_inliers.std():.4f}   range {np.ptp(nm_inliers):.4f}")
-    print(f"            relative precision: {nm_inliers.std() / nm_inliers.mean() * 100:.3f}%")
+    array = np.array(values)
+    relative = float(array.std(ddof=1) / array.mean())
+    print(f"\nRegions measured : {len(values)}")
+    print(f"  mean           : {array.mean():.4f} nm/px")
+    print(f"  std (n-1)      : {array.std(ddof=1):.4f} nm/px")
+    print(f"  range          : {np.ptp(array):.4f} nm/px")
+    print(f"  repeatability  : {relative * 100:.3f}%  (precision only)")
+    print(f"  grating tolerance: {calibration.PITCH_RELATIVE_UNCERTAINTY * 100:.3f}%  (systematic floor)")
+    print(f"  combined        : {calibration.total_relative_uncertainty(relative) * 100:.3f}%")
 
 
 if __name__ == "__main__":

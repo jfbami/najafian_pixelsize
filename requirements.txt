@@ -1,4 +1,4 @@
-# Core measurement (no GPU, no network) — validated locally
+# Core measurement (no GPU, no network) - validated locally
 numpy>=1.24
 pillow>=10.0
 scipy>=1.10
