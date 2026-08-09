@@ -49,6 +49,14 @@ class TiffMetadata:
 
 @dataclass
 class MeasurementResult:
+    """One frame's grid measurement.
+
+    `valid` is the gate: when it is False, `pixels_per_space` and `nm_per_pixel`
+    are NaN and the frame has no usable measurement. `nm_per_pixel_uncertainty`
+    combines the comb-fit precision with the grating standard's own tolerance,
+    so it is the figure to quote alongside a result.
+    """
+
     pixels_per_space: float
     nm_per_pixel: float
     spacing_x: float
@@ -57,6 +65,11 @@ class MeasurementResult:
     grid_uniformity: float
     axis_separation_deg: float = 0.0
     axis_count: int = 0
+    spectral_concentration: float = 0.0
+    relative_precision: float = float("nan")
+    nm_per_pixel_uncertainty: float = float("nan")
+    fundamental_inferred: bool = False
+    valid: bool = False
     warning: Optional[str] = None
 
 
