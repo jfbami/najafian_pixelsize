@@ -4,6 +4,20 @@ Working conventions for the `najafian_pixelsize` calibration measurement project
 These rules apply to every agent and contributor working in this repository.
 They override default tooling behaviour where the two disagree.
 
+## Setup
+
+The mechanical rules below are enforced by git hooks in `.githooks/`.
+Git does not enable a versioned hooks directory automatically, so run this once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Without that command the hooks are inert and the rules rely on memory alone.
+`.githooks/pre-commit` rejects banned dashes and hand edits to generated files.
+`.githooks/commit-msg` rejects an AI agent named in a `Co-Authored-By` trailer.
+Bypass either with `git commit --no-verify` when you genuinely need to.
+
 ## Writing conventions
 
 Never use the em dash character (Unicode U+2014), and never use the en dash (U+2013).
