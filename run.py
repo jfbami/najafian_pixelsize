@@ -11,12 +11,13 @@ script wires them to live Google Drive access and the orchestrator agent.
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 from pathlib import Path
 
 import yaml
 
-from src.agent import run_agent
+from src.agent import DEFAULT_BATCH_SIZE, run_agent
 from src.drive_client import DriveClient
 from src.state import StateStore
 from src.tools import ToolBox
@@ -51,10 +52,12 @@ def main() -> None:
         folder_paths=folder_paths,
         model=config["agent"]["model"],
         max_tokens=config["agent"]["max_tokens"],
+        batch_size=int(config["agent"].get("batch_size", DEFAULT_BATCH_SIZE)),
     )
 
     print(summary)
     _report(store)
+    _write_outputs(store, base_dir, config)
     store.close()
 
 
@@ -87,7 +90,28 @@ def _report(store: StateStore) -> None:
     if successes:
         values = [row["nm_per_pixel"] for row in successes if row["nm_per_pixel"]]
         if values:
-            print(f"nm/pixel range: {min(values):.4f} – {max(values):.4f}")
+            print(f"nm/pixel range: {min(values):.4f} - {max(values):.4f}")
+
+
+def _write_outputs(store: StateStore, base_dir: Path, config: dict) -> None:
+    """Write the results and review CSVs named in the config."""
+    output = config.get("output", {})
+    results_path = base_dir / output.get("results_filename", "calibration_results.csv")
+    review_path = base_dir / output.get("review_filename", "review_queue.csv")
+
+    _write_rows(results_path, store.all_results())
+    _write_rows(review_path, store.review_items())
+    print(f"\nWrote {results_path.name} and {review_path.name}")
+
+
+def _write_rows(path: Path, rows: list) -> None:
+    if not rows:
+        path.write_text("")
+        return
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(dict(row) for row in rows)
 
 
 if __name__ == "__main__":

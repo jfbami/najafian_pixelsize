@@ -1,0 +1,3 @@
+#!/bin/sh
+# Enforces AGENTS.md conventions on staged content. See .githooks/checks.py.
+exec python "$(git rev-parse --show-toplevel)/.githooks/checks.py" --staged

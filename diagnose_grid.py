@@ -5,21 +5,21 @@ with a spatial autocorrelation estimate, and saves a zoomed crop so the grid
 period can be verified by eye.
 """
 
+import argparse
 import math
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = None
+from src.imaging import load_grayscale
 
-FRAME = Path(r"C:\Users\jfbaa\OneDrive\Documents\test\17E00231\17E00231-1\17E00231-1_115.tif")
-CROP_OUT = Path(r"C:\Users\jfbaa\OneDrive\Documents\test\calib_crop.png")
+Image.MAX_IMAGE_PIXELS = None
 
 
 def load_gray(path):
-    with Image.open(path) as handle:
-        return np.asarray(handle.convert("L"), dtype=np.float32)
+    """Bit-depth aware, so 16-bit frames are not flattened before inspection."""
+    return load_grayscale(str(path))
 
 
 def top_peaks(image, count=12):
@@ -70,13 +70,22 @@ def _first_peak(acf, min_lag=10):
     return None
 
 
-def save_crop(image):
-    crop = image[800:1200, 800:1200]
-    Image.fromarray(crop.astype(np.uint8)).save(CROP_OUT)
+def save_crop(image, destination):
+    """Save a centre crop, rescaled to 8 bits so 16-bit frames stay visible."""
+    top, left = max(0, image.shape[0] // 2 - 200), max(0, image.shape[1] // 2 - 200)
+    crop = image[top : top + 400, left : left + 400]
+    span = float(crop.max() - crop.min()) or 1.0
+    scaled = (crop - crop.min()) / span * 255.0
+    Image.fromarray(scaled.astype(np.uint8)).save(destination)
 
 
-if __name__ == "__main__":
-    image = load_gray(FRAME)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("frame", type=Path)
+    parser.add_argument("--crop-out", type=Path, default=Path("calib_crop.png"))
+    args = parser.parse_args()
+
+    image = load_gray(args.frame)
     print(f"image: {image.shape[1]} x {image.shape[0]}")
 
     print("\nTop FFT peaks (spacing_px, angle_deg, peak/median):")
@@ -87,5 +96,9 @@ if __name__ == "__main__":
     print(f"\nAutocorrelation first peak (row-avg profile): {row_lag} px")
     print(f"Autocorrelation first peak (col-avg profile): {col_lag} px")
 
-    save_crop(image)
-    print(f"\nSaved 400x400 crop to {CROP_OUT}")
+    save_crop(image, args.crop_out)
+    print(f"\nSaved 400x400 crop to {args.crop_out}")
+
+
+if __name__ == "__main__":
+    main()

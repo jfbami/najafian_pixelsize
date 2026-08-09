@@ -28,6 +28,9 @@ def choose_calibration(
     auto_use_within_days: int,
     max_date_window_days: int,
 ) -> MatchDecision:
+    if tissue.magnification is None:
+        return MatchDecision(None, None, False, "tissue magnification unknown")
+
     same_magnification = [
         candidate
         for candidate in candidates
@@ -36,9 +39,11 @@ def choose_calibration(
     if not same_magnification:
         return MatchDecision(None, None, False, "no calibration at matching magnification")
 
+    # Candidates with an unreadable date sort last rather than crashing the
+    # comparison, and are only chosen when nothing dated is available.
     best = min(
         same_magnification,
-        key=lambda candidate: _date_distance(candidate.metadata, tissue),
+        key=lambda candidate: _sort_key(_date_distance(candidate.metadata, tissue)),
     )
     delta = _date_distance(best.metadata, tissue)
 
@@ -49,6 +54,11 @@ def choose_calibration(
     if delta > auto_use_within_days:
         return MatchDecision(best, delta, False, f"calibration {delta} days away exceeds auto-use window")
     return MatchDecision(best, delta, True, f"matched within {delta} days at same magnification")
+
+
+def _sort_key(delta: Optional[int]) -> tuple[int, int]:
+    """Order by date distance, pushing unknown dates behind every known one."""
+    return (1, 0) if delta is None else (0, delta)
 
 
 def _date_distance(

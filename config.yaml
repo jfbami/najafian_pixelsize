@@ -1,4 +1,4 @@
-# Google Drive accounts — each owner shares their root folder with the
+# Google Drive accounts - each owner shares their root folder with the
 # service account email (one click per person).
 accounts:
   - name: frida
@@ -20,18 +20,30 @@ state:
 credentials:
   service_account_json: "service_account.json"
 
-# Physical calibration standard — anchors every measurement. Do not change
-# without a new physical grating standard.
+# Physical calibration standard - anchors every measurement. Defined in
+# src/calibration.py and derived from the ruling (2160 lines/mm = 0.4629630 um)
+# so there is a single source of truth; it is NOT read from this file. Changing
+# the standard means editing src/calibration.py and re-validating.
 calibration:
-  physical_pitch_um: 0.463
   grid_standard_name: "TedPella Prod. No. 607"
+  grid_lines_per_mm: 2160
 
-# FFT detection thresholds (validated on reference data: calibration scored
-# ~0.98, the strongest tissue frame scored well below).
+# FFT detection thresholds. Validated on the reference set: calibration frames
+# scored 0.965-0.970 against a strongest-tissue score of 0.499. Re-run
+# revalidate_detector.py after changing any of these.
 detection:
   confidence_threshold: 0.60
   squareness_threshold: 0.90
   orthogonality_tolerance_deg: 12.0
+  concentration_threshold: 0.05
+
+# Independent checks run before a result is saved.
+crosscheck:
+  # The microscope's embedded XpixCal is a template default on this instrument
+  # (a constant 150.000000 at every magnification, matching no unit reading of
+  # the true scale), so comparing against it flags every correct frame as a 3x
+  # harmonic error. Enable only after confirming XpixCal tracks magnification.
+  trust_embedded_scale: false
 
 # Calibration-to-tissue matching by magnification and acquisition date.
 matching:
@@ -39,6 +51,8 @@ matching:
   auto_use_within_days: 7
 
 agent:
-  model: "claude-sonnet-4-6"
+  model: "claude-sonnet-5"
   max_tokens: 4096
+  # Folders per conversation. One conversation for the whole run would outgrow
+  # the context window part-way through and lose hours of work.
   batch_size: 10

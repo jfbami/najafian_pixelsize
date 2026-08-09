@@ -48,7 +48,20 @@ class StateStore:
         return [row["case_id"] for row in rows]
 
     def save_result(self, result: CaseResult) -> None:
+        """Persist a finished case.
+
+        The row is created if it is missing: an UPDATE alone silently discards
+        the result for any case the run never registered, which loses a
+        completed measurement with no error anywhere.
+        """
         self._connection.execute(
+            """
+            INSERT OR IGNORE INTO cases (case_id, subfolder_path, account_name, status)
+            VALUES (?, ?, ?, 'pending')
+            """,
+            (result.case_id, result.subfolder_path, _account_of(result.case_id)),
+        )
+        cursor = self._connection.execute(
             """
             UPDATE cases SET
                 status = ?, nm_per_pixel = ?, calibration_frame = ?,
@@ -74,15 +87,22 @@ class StateStore:
                 result.case_id,
             ),
         )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"failed to persist case {result.case_id!r}")
         self._connection.commit()
 
     def flag_for_review(
         self, case_id: str, reason: str, explanation: str, priority: str
     ) -> None:
+        """Queue a case for human review; repeat calls update rather than stack."""
         self._connection.execute(
             """
             INSERT INTO review_queue (case_id, reason, agent_explanation, priority)
             VALUES (?, ?, ?, ?)
+            ON CONFLICT(case_id, reason) DO UPDATE SET
+                agent_explanation = excluded.agent_explanation,
+                priority = excluded.priority,
+                resolved = 0
             """,
             (case_id, reason, explanation, priority),
         )
@@ -125,6 +145,16 @@ class StateStore:
         ).fetchone()
         return _to_cached_calibration(row) if row else None
 
+    def reference_frames(self) -> list[tuple[int, float]]:
+        """(magnification, nm_per_pixel) pairs for the magnification-law check."""
+        rows = self._connection.execute(
+            """
+            SELECT magnification, nm_per_pixel FROM calibration_cache
+            WHERE magnification IS NOT NULL AND nm_per_pixel IS NOT NULL
+            """
+        ).fetchall()
+        return [(row["magnification"], row["nm_per_pixel"]) for row in rows]
+
     def all_results(self) -> list[sqlite3.Row]:
         return self._connection.execute(
             "SELECT * FROM cases ORDER BY subfolder_path"
@@ -137,6 +167,11 @@ class StateStore:
 
     def close(self) -> None:
         self._connection.close()
+
+
+def _account_of(case_id: str) -> str:
+    """Case ids are '<account>:<folder_id>'; fall back to the whole id."""
+    return case_id.split(":", 1)[0] if ":" in case_id else case_id
 
 
 def _to_cached_calibration(row: sqlite3.Row) -> CachedCalibration:

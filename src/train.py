@@ -29,10 +29,12 @@ class LabeledFrame:
 
 
 def load_labels(labels_csv: Path) -> list[LabeledFrame]:
-    with labels_csv.open(newline="") as handle:
+    """Read bootstrap labels, skipping frames that failed to load."""
+    with labels_csv.open(newline="", encoding="utf-8") as handle:
         return [
             LabeledFrame(path=row["path"], label=int(row["is_calibration"]))
             for row in csv.DictReader(handle)
+            if not row.get("error") and row.get("is_calibration") not in (None, "")
         ]
 
 
