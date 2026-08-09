@@ -7,8 +7,9 @@ Run by the git hooks in this directory. Two independent checks:
         files, and rejects hand edits to generated files.
 
     python .githooks/checks.py --message .git/COMMIT_EDITMSG
-        Rejects an AI agent named in a Co-Authored-By trailer, and rejects
-        the banned dashes in the commit message itself.
+        Rejects AI agent attribution, both Co-Authored-By trailers and
+        "Generated with ..." footers, and rejects the banned dashes in the
+        commit message itself.
 
 Both exit 0 when clean and 1 with an explanation when not.
 Bypass a hook with `git commit --no-verify` when you genuinely need to.
@@ -32,9 +33,18 @@ TEXT_SUFFIXES = frozenset(
 GENERATED_FILES = frozenset({"CHANGELOG.md"})
 GENERATED_MARKER = re.compile(r"auto-?generated|do not edit", re.IGNORECASE)
 
-AGENT_COAUTHOR = re.compile(
-    r"^\s*co-authored-by:.*\b(claude|anthropic|gpt|openai|copilot|cursor|codex|gemini)\b",
-    re.IGNORECASE | re.MULTILINE,
+AGENT_NAMES = r"claude|anthropic|gpt|openai|copilot|cursor|codex|gemini"
+
+# Any agent attribution, not only co-author trailers. A "Generated with ..."
+# footer is the same rule wearing a different hat, so both are matched.
+AGENT_ATTRIBUTION = (
+    re.compile(
+        rf"^\s*co-authored-by:.*\b({AGENT_NAMES})\b", re.IGNORECASE | re.MULTILINE
+    ),
+    re.compile(
+        rf"^.*\b(generated|created|authored|written)\s+(with|by)\b.*\b({AGENT_NAMES})\b.*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 )
 
 
@@ -78,12 +88,13 @@ def check_commit_message(message_path: str) -> int:
 
     body = strip_comments(message)
     problems = list(dash_problems("commit message", body))
-    for match in AGENT_COAUTHOR.finditer(body):
-        problems.append(
-            f"commit message:{line_of(body, match.start())}: "
-            f"AI agent named as co-author: {match.group(0).strip()!r} "
-            f"(AGENTS.md, 'Commit conventions')"
-        )
+    for pattern in AGENT_ATTRIBUTION:
+        for match in pattern.finditer(body):
+            problems.append(
+                f"commit message:{line_of(body, match.start())}: "
+                f"AI agent attribution: {match.group(0).strip()!r} "
+                f"(AGENTS.md, 'Commit and authorship conventions')"
+            )
 
     return report(problems, "Commit rejected by .githooks/commit-msg")
 
