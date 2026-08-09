@@ -1,13 +1,16 @@
-# Credentials — never commit
+# Credentials - never commit
 service_account.json
 
 # Run artifacts
 state.db
 temp/
 labels.csv
+calibration_results.csv
+review_queue.csv
 *.pt
 
 # Python
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
