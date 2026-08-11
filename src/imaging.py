@@ -30,6 +30,12 @@ _WIDE_MODES = frozenset({"I", "I;16", "I;16B", "I;16L", "I;16N", "I;32", "I;32B"
 
 # Info-bar detection.
 _BAR_FLATNESS = 0.7        # fraction of a line at one value for it to be bar
+# A bar line is also nearly uniform. Modal share alone is not enough: a
+# high-contrast grating is mostly dark background with thin bright lines, so
+# over 70% of its pixels sit at the background value while the line still has a
+# standard deviation of 89. Requiring low variance as well stops real image
+# content being trimmed away as if it were bar.
+_BAR_MAX_RELATIVE_STD = 0.05
 _BAR_VALUE_TOLERANCE = 1.0 # intensity units counted as "the same value"
 _BAR_TEXT_GAP = 60         # lines of text a bar may contain without splitting
 _MIN_CONTENT_FRACTION = 0.5  # never crop away more than half an axis
@@ -106,7 +112,8 @@ def content_region(
 
 def _axis_slice(image: np.ndarray, axis: int) -> slice:
     flat = _flat_fraction(image, axis=axis)
-    is_bar = _bridge_gaps(flat > _BAR_FLATNESS, _BAR_TEXT_GAP)
+    is_bar = (flat > _BAR_FLATNESS) & _is_uniform(image, axis)
+    is_bar = _bridge_gaps(is_bar, _BAR_TEXT_GAP)
     length = is_bar.size
 
     start = 0
@@ -120,6 +127,15 @@ def _axis_slice(image: np.ndarray, axis: int) -> slice:
     if end - start < length * _MIN_CONTENT_FRACTION:
         return slice(0, length)
     return slice(start, end)
+
+
+def _is_uniform(image: np.ndarray, axis: int) -> np.ndarray:
+    """Which lines are nearly flat compared with the frame's typical line."""
+    spread = image.std(axis=axis)
+    reference = float(np.median(spread))
+    if reference <= 0.0:
+        return np.zeros(spread.shape, dtype=bool)
+    return spread <= reference * _BAR_MAX_RELATIVE_STD
 
 
 def _flat_fraction(image: np.ndarray, axis: int) -> np.ndarray:
