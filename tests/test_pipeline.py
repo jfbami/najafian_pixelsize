@@ -90,20 +90,63 @@ def test_tissue_scores_below_grating(tmp_path):
 # matching
 # --------------------------------------------------------------------------
 
-def _metadata(date, magnification=15000):
-    return TiffMetadata(magnification, date, None, None, None, None, None, None)
+def _metadata(date, magnification=15000, width=2512, height=2496):
+    return TiffMetadata(
+        magnification, date, None, None, None, None, width, height
+    )
 
 
-def _candidate(date, name, magnification=15000):
+def _candidate(date, name, magnification=15000, width=2512, height=2496):
     return CalibrationCandidate(
         folder=DriveFolder("a", "f", "n", "s", "p", [], 0),
         frame_index=0,
         frame_id=name,
         filename=name,
-        metadata=_metadata(date, magnification),
+        metadata=_metadata(date, magnification, width, height),
         detector_confidence=1.0,
         fft_peak_ratio=1.0,
     )
+
+
+def test_calibration_at_a_different_resolution_is_refused():
+    """The lab saves at several resolutions, and nm/pixel is a property of the
+    pixel grid. Pairing a 2512px calibration with a 1024px tissue frame at the
+    same magnification would apply a scale wrong by the resolution ratio,
+    silently and with every cross-check passing."""
+    decision = choose_calibration(
+        [_candidate("2026-02-17", "highres", width=2512, height=2496)],
+        _metadata("2026-02-17", width=1024, height=1194),
+        auto_use_within_days=7,
+        max_date_window_days=30,
+    )
+    assert not decision.auto_usable
+    assert decision.candidate is None
+    # The reason must name both formats, so a reviewer can see why at a glance.
+    assert "2512x2496" in decision.reason
+    assert "1024x1194" in decision.reason
+
+
+def test_calibration_at_the_same_resolution_still_matches():
+    decision = choose_calibration(
+        [_candidate("2026-02-17", "same", width=2512, height=2496)],
+        _metadata("2026-02-17", width=2512, height=2496),
+        auto_use_within_days=7,
+        max_date_window_days=30,
+    )
+    assert decision.auto_usable
+    assert decision.candidate.frame_id == "same"
+
+
+def test_a_differing_info_bar_height_does_not_block_a_match():
+    """Bar height varies between acquisitions on the same camera, so a small
+    difference must not be read as a different sensor format."""
+    decision = choose_calibration(
+        [_candidate("2026-02-17", "shorter-bar", width=2512, height=2460)],
+        _metadata("2026-02-17", width=2512, height=2496),
+        auto_use_within_days=7,
+        max_date_window_days=30,
+    )
+    assert decision.auto_usable
 
 
 def test_missing_dates_do_not_crash_the_match():
@@ -265,4 +308,105 @@ def test_reference_frames_feed_the_magnification_check(tmp_path):
         CachedCalibration(15000, "2026-02-17", "frida", "fid", 114, 4.3033, 1.0)
     )
     assert store.reference_frames() == [(15000, 4.3033)]
+    store.close()
+
+
+def test_resolution_check_survives_the_tool_layer():
+    """The matcher's resolution rule is only real if the tool passes the
+    dimensions through. An earlier version hardcoded image_width=None here,
+    which left the check in place but permanently disabled."""
+    from src.tools import ToolBox
+
+    toolbox = ToolBox.__new__(ToolBox)
+    toolbox._config = {"matching": {"auto_use_within_days": 7, "max_date_window_days": 30}}
+
+    mismatched = toolbox.choose_calibration_frame(
+        candidates=[
+            {
+                "frame_id": "highres",
+                "magnification": 15000,
+                "acquisition_date": "2026-02-17",
+                "image_width": 2512,
+                "image_height": 2496,
+            }
+        ],
+        tissue_magnification=15000,
+        tissue_date="2026-02-17",
+        tissue_width=1024,
+        tissue_height=1194,
+    )
+    assert not mismatched["auto_usable"]
+    assert "2512x2496" in mismatched["reason"]
+
+    matched = toolbox.choose_calibration_frame(
+        candidates=[
+            {
+                "frame_id": "sameres",
+                "magnification": 15000,
+                "acquisition_date": "2026-02-17",
+                "image_width": 1024,
+                "image_height": 1194,
+            }
+        ],
+        tissue_magnification=15000,
+        tissue_date="2026-02-17",
+        tissue_width=1024,
+        tissue_height=1194,
+    )
+    assert matched["auto_usable"]
+    assert matched["frame_id"] == "sameres"
+
+
+def test_an_older_database_gains_new_columns(tmp_path):
+    """Resuming a run written before image_width existed must not fail."""
+    import sqlite3
+
+    db_path = tmp_path / "old.db"
+    legacy = sqlite3.connect(db_path)
+    # The exact `cases` table the previous version wrote: everything except the
+    # image_width and image_height columns added for resolution matching.
+    legacy.execute(
+        """
+        CREATE TABLE cases (
+            case_id TEXT PRIMARY KEY,
+            subfolder_path TEXT NOT NULL,
+            account_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            nm_per_pixel REAL,
+            calibration_frame TEXT,
+            calibration_source TEXT,
+            pixels_per_space REAL,
+            fft_confidence REAL,
+            detector_confidence REAL,
+            magnification INTEGER,
+            calibration_date TEXT,
+            tissue_date TEXT,
+            date_delta_days INTEGER,
+            agent_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    legacy.execute(
+        "INSERT INTO cases (case_id, subfolder_path, account_name) VALUES "
+        "('frida:old', 'p', 'frida')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = StateStore(str(db_path))
+    store.save_result(
+        CaseResult(
+            case_id="frida:old", subfolder_path="p", status="success",
+            nm_per_pixel=4.23, calibration_frame="f.tif", calibration_source="same_folder",
+            calibration_date="2026-02-17", tissue_date="2026-02-17", date_delta_days=0,
+            magnification=15000, pixels_per_space=109.3, fft_confidence=1.0,
+            detector_confidence=1.0, agent_notes="n",
+            image_width=2512, image_height=2496,
+        )
+    )
+    row = store.all_results()[0]
+    assert row["image_width"] == 2512
+    assert row["image_height"] == 2496
     store.close()

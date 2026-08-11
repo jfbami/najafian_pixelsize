@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS cases (
     fft_confidence REAL,
     detector_confidence REAL,
     magnification INTEGER,
+    image_width INTEGER,
+    image_height INTEGER,
     calibration_date TEXT,
     tissue_date TEXT,
     date_delta_days INTEGER,

@@ -9,17 +9,19 @@ TIFF to download.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import calibration
 from . import crosscheck
 from . import matcher
 from . import metadata as metadata_module
 from .detect import Thresholds, detect_calibration
-from .drive_client import DriveClient
 from .measurer import measure_grid
 from .models import CalibrationCandidate, CaseResult, DriveFolder, TiffMetadata
 from .state import StateStore
+
+if TYPE_CHECKING:  # DriveClient needs the Google libraries; the rest does not,
+    from .drive_client import DriveClient  # so keep the tool layer importable.
 
 TOOL_DEFINITIONS: list[dict] = [
     {
@@ -97,8 +99,10 @@ TOOL_DEFINITIONS: list[dict] = [
         "name": "choose_calibration_frame",
         "description": (
             "Apply the lab SOP to pick which calibration candidate pairs with the "
-            "tissue: same magnification required, nearest acquisition date wins, "
-            "and the date windows decide auto-use vs review."
+            "tissue: same magnification and same resolution required, nearest "
+            "acquisition date wins, and the date windows decide auto-use vs "
+            "review. Resolution must match because nm/pixel describes a pixel "
+            "grid, so a 2512px calibration does not apply to a 1024px frame."
         ),
         "input_schema": {
             "type": "object",
@@ -111,14 +115,23 @@ TOOL_DEFINITIONS: list[dict] = [
                             "frame_id": {"type": "string"},
                             "magnification": {"type": "integer"},
                             "acquisition_date": {"type": "string"},
+                            "image_width": {"type": "integer"},
+                            "image_height": {"type": "integer"},
                         },
-                        "required": ["frame_id"],
+                        "required": ["frame_id", "image_width", "image_height"],
                     },
                 },
                 "tissue_magnification": {"type": "integer"},
                 "tissue_date": {"type": "string"},
+                "tissue_width": {"type": "integer"},
+                "tissue_height": {"type": "integer"},
             },
-            "required": ["candidates", "tissue_magnification"],
+            "required": [
+                "candidates",
+                "tissue_magnification",
+                "tissue_width",
+                "tissue_height",
+            ],
         },
     },
     {
@@ -147,6 +160,8 @@ TOOL_DEFINITIONS: list[dict] = [
                 "tissue_date": {"type": "string"},
                 "date_delta_days": {"type": "integer"},
                 "magnification": {"type": "integer"},
+                "image_width": {"type": "integer"},
+                "image_height": {"type": "integer"},
                 "pixels_per_space": {"type": "number"},
                 "fft_confidence": {"type": "number"},
                 "detector_confidence": {"type": "number"},
@@ -185,7 +200,7 @@ _DISPATCHABLE = frozenset(definition["name"] for definition in TOOL_DEFINITIONS)
 
 
 class ToolBox:
-    def __init__(self, drive: DriveClient, store: StateStore, config: dict, temp_dir: Path):
+    def __init__(self, drive: "DriveClient", store: StateStore, config: dict, temp_dir: Path):
         self._drive = drive
         self._store = store
         self._config = config
@@ -343,6 +358,8 @@ class ToolBox:
         candidates: list[dict],
         tissue_magnification: int,
         tissue_date: str | None = None,
+        tissue_width: int | None = None,
+        tissue_height: int | None = None,
     ) -> dict:
         matching = self._config.get("matching", {})
         decision = matcher.choose_calibration(
@@ -354,8 +371,8 @@ class ToolBox:
                 pixel_cal_embedded=None,
                 unit_embedded=None,
                 instrument_id=None,
-                image_width=None,
-                image_height=None,
+                image_width=tissue_width,
+                image_height=tissue_height,
             ),
             auto_use_within_days=int(matching.get("auto_use_within_days", 7)),
             max_date_window_days=int(matching.get("max_date_window_days", 30)),
@@ -400,6 +417,8 @@ class ToolBox:
                 tissue_date=fields.get("tissue_date"),
                 date_delta_days=fields.get("date_delta_days"),
                 magnification=fields.get("magnification"),
+                image_width=fields.get("image_width"),
+                image_height=fields.get("image_height"),
                 pixels_per_space=fields.get("pixels_per_space"),
                 fft_confidence=fields.get("fft_confidence"),
                 detector_confidence=fields.get("detector_confidence"),
@@ -444,8 +463,8 @@ def _to_candidate(entry: dict) -> CalibrationCandidate:
             pixel_cal_embedded=None,
             unit_embedded=None,
             instrument_id=None,
-            image_width=None,
-            image_height=None,
+            image_width=entry.get("image_width"),
+            image_height=entry.get("image_height"),
         ),
         detector_confidence=float(entry.get("detector_confidence", 0.0)),
         fft_peak_ratio=float(entry.get("fft_peak_ratio", 0.0)),
