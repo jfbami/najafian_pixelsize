@@ -321,3 +321,20 @@ def test_a_clean_comb_is_unaffected_by_the_new_search():
     assert solution.spacing == pytest.approx(20.0, rel=1e-3)
     assert solution.reliable
     assert not solution.fundamental_inferred
+
+
+def test_high_contrast_grating_is_not_mistaken_for_an_info_bar():
+    """Modal share alone read real image content as bar.
+
+    A grating with thin bright lines on a dark field has most of its pixels at
+    the background value, so over 70% of each line sits at the median even
+    though the line's standard deviation is 89. On real frame 2001-_05336.tif
+    that trimmed 56 columns of grid away. A bar line must also be uniform.
+    """
+    grating = cross_grating(21.0, size=1024, duty=0.15)
+    with_bar = _with_info_bar(grating, bar_rows=170)
+
+    rows, cols = content_region(with_bar)
+
+    assert (cols.stop - cols.start) == 1024, "no grid columns may be trimmed"
+    assert (rows.stop - rows.start) == 1024, "only the info bar may be trimmed"
