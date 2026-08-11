@@ -46,6 +46,11 @@ MEASUREMENT RULES - these are not negotiable:
   when the cross-checks pass.
 
 MATCHING RULES (lab SOP):
+- The calibration frame must have the same resolution as the tissue frame.
+  nm/pixel describes a pixel grid, so a calibration measured on a 2512px frame
+  does not apply to a 1024px frame even at the same magnification. Use
+  choose_calibration_frame, which enforces this; never pair them by hand.
+- Always pass image_width and image_height to save_result.
 - Use choose_calibration_frame to apply the SOP; do not do the date arithmetic
   yourself.
 - Prefer a calibration frame from the same folder at the same magnification.

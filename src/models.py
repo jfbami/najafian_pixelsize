@@ -64,6 +64,7 @@ class MeasurementResult:
     fft_confidence: float
     grid_uniformity: float
     axis_separation_deg: float = 0.0
+    axis_angle_deg: float = float("nan")
     axis_count: int = 0
     spectral_concentration: float = 0.0
     relative_precision: float = float("nan")
@@ -112,3 +113,7 @@ class CaseResult:
     detector_confidence: Optional[float]
     agent_notes: str
     review_reason: Optional[str] = None
+    # Frame resolution is part of the result, not incidental: nm/pixel only
+    # describes a pixel grid of this size.
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None

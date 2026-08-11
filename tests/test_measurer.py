@@ -180,11 +180,24 @@ def test_info_bar_is_cropped_before_measuring(at_top, period):
     assert relative_error_percent(result.pixels_per_space, period) < ACCURACY_TOLERANCE_PERCENT
 
 
-def test_fine_grid_with_an_info_bar_is_unmeasurable_uncropped():
-    """The regression the crop exists for: without it, the bar's edge beats the
-    real comb on one axis and the frame is refused."""
+def test_an_info_bar_does_not_shift_the_measurement():
+    """A burned-in bar must not change the answer, by either defence.
+
+    This originally asserted that an uncropped bar made the frame unmeasurable,
+    which is what the crop was built for. Making the fundamental search robust
+    to a single dominant spurious peak then fixed the same failure at its root,
+    so the bar no longer defeats the fit even uncropped. Both paths must now
+    agree, and both must be right.
+    """
     with_bar = _with_info_bar(cross_grating(21.0, size=1024))
-    assert not measure_array(with_bar).valid
+    rows, cols = content_region(with_bar)
+
+    uncropped = measure_array(with_bar)
+    cropped = measure_array(np.ascontiguousarray(with_bar[rows, cols]))
+
+    assert cropped.valid and uncropped.valid
+    assert relative_error_percent(cropped.pixels_per_space, 21.0) < ACCURACY_TOLERANCE_PERCENT
+    assert math.isclose(cropped.pixels_per_space, uncropped.pixels_per_space, rel_tol=5e-3)
 
 
 def test_info_bar_crop_matches_the_clean_frame():
@@ -241,3 +254,70 @@ def test_repeatability_across_image_regions():
         values.append(result.nm_per_pixel)
     spread = float(np.std(values) / np.mean(values))
     assert spread < 0.01, f"region-to-region spread {spread:.4%} exceeds 1%"
+
+
+# --------------------------------------------------------------------------
+# fundamental selection
+# --------------------------------------------------------------------------
+
+def _peak(period, angle, magnitude):
+    from src.measurer import _Peak
+
+    # row and col are only used for spectrum bookkeeping, not by the solver.
+    return _Peak(
+        frequency=1.0 / period, angle=angle, magnitude=magnitude, row=0, col=0
+    )
+
+
+def _contaminated_axis():
+    """The exact peak set from real frame 2001-_05337.tif, axis at 158 deg.
+
+    A clean 20.51px comb (20.51, 10.24, 6.82, 4.97) plus one stray peak at
+    51.47px from the diagonal moire banding across that frame. 51.47 is 2.51x
+    the true pitch, so it is a harmonic of nothing.
+    """
+    return [
+        _peak(10.242, 158.37, 4171482),
+        _peak(20.511, 158.24, 2875617),
+        _peak(6.823, 158.45, 1769832),
+        _peak(51.472, 149.30, 328203),
+        _peak(4.971, 144.53, 321804),
+        _peak(4.971, 172.29, 313645),
+    ]
+
+
+def test_a_stray_low_frequency_peak_does_not_capture_the_fit():
+    """Seeding from the lowest observed frequency made that one peak a single
+    point of failure: the stray 51.47px moire peak anchored the fit there,
+    explained only 46% of the comb, and a measurable frame was refused."""
+    from src.measurer import _solve_axis
+
+    solution = _solve_axis(_contaminated_axis(), span=1024.0, cutoff=0.004)
+
+    assert solution.spacing == pytest.approx(20.5, abs=0.3)
+    assert solution.reliable
+    assert solution.inlier_fraction > 0.8
+
+
+def test_the_stray_peak_is_excluded_rather_than_fitted():
+    from src.measurer import _solve_axis
+
+    solution = _solve_axis(_contaminated_axis(), span=1024.0, cutoff=0.004)
+    assert solution.dominant_order <= 2
+
+
+def test_a_clean_comb_is_unaffected_by_the_new_search():
+    """The fundamental must still win outright when nothing is contaminating."""
+    from src.measurer import _solve_axis
+
+    clean = [
+        _peak(20.0, 158.0, 4000000),
+        _peak(10.0, 158.0, 2000000),
+        _peak(6.667, 158.0, 900000),
+        _peak(5.0, 158.0, 400000),
+    ]
+    solution = _solve_axis(clean, span=1024.0, cutoff=0.004)
+
+    assert solution.spacing == pytest.approx(20.0, rel=1e-3)
+    assert solution.reliable
+    assert not solution.fundamental_inferred

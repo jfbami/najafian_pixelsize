@@ -3,9 +3,15 @@
 Usage:
     python validate_core.py FRAME.tif [FRAME2.tif ...]
     python validate_core.py --folder PATH/TO/ACQUISITION
+    python validate_core.py FRAME.tif --region
 
 Prints the parsed metadata, the measurement with its uncertainty, and the
 cross-checks against the microscope's own embedded scale.
+
+`--region` additionally measures only the flat, undistorted tiles of the
+grating and reports how far the whole-frame reading sits from them. A large
+disagreement means the replica is folded or contaminated and the whole-frame
+number should not be used.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ from src.detect import detect_calibration
 from src.metadata import parse_tiff_metadata
 
 
-def report(frame: Path) -> None:
+def report(frame: Path, use_regions: bool = False) -> None:
     print(f"\n=== {frame.name} ===")
     try:
         metadata = parse_tiff_metadata(str(frame))
@@ -66,11 +72,38 @@ def report(frame: Path) -> None:
     if result.warning:
         print(f"  warning:           {result.warning}")
 
+    if use_regions:
+        _report_regions(frame)
+
+
+def _report_regions(frame: Path) -> None:
+    from src.imaging import load_grayscale
+    from src.regions import measure_straightest_region
+
+    region = measure_straightest_region(load_grayscale(str(frame)))
+    best = region.measurement
+    print(f"  --- straightest region ---")
+    print(f"  tiles used:        {len(region.selected_tiles)} of {len(region.tiles)} "
+          f"at {region.tile_size}px")
+    if not best.valid:
+        print(f"  no usable region:  {region.warning}")
+        return
+    print(f"  --> nm/pixel:      {best.nm_per_pixel:.4f} +/- "
+          f"{best.nm_per_pixel_uncertainty:.4f}")
+    print(f"  tile spread:       {region.tile_spread_percent:.3f}%")
+    print(f"  whole-frame gap:   {region.disagreement_percent:+.3f}%  "
+          f"(large means the replica is distorted)")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("frames", nargs="*", type=Path)
     parser.add_argument("--folder", type=Path, help="report on every TIFF in a folder")
+    parser.add_argument(
+        "--region",
+        action="store_true",
+        help="also measure only the flat, undistorted tiles of the grating",
+    )
     args = parser.parse_args()
 
     frames = list(args.frames)
@@ -80,7 +113,7 @@ def main() -> None:
         parser.error("give at least one frame, or --folder")
 
     for frame in frames:
-        report(frame)
+        report(frame, use_regions=args.region)
 
 
 if __name__ == "__main__":

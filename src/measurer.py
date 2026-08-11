@@ -49,6 +49,13 @@ _PROMINENCE_SATURATION = 60.0   # peak/median ratio mapped to confidence 1.0
 # Harmonic-comb solving.
 _MAX_MISSING_FUNDAMENTAL_ORDER = 8   # search f0 = f_lowest / k for k = 1 .. this
 _HARMONIC_TOLERANCE = 0.12           # |n - f/f0| accepted as an integer multiple
+_SEED_HARMONIC_TOLERANCE = 0.03      # stricter, for judging candidate fundamentals
+_MAX_CANDIDATE_ORDER = 8             # a strong peak may be up to this harmonic
+_FRACTION_TIE_BAND = 0.05            # explained-energy gap treated as a tie
+# A candidate only displaces the default seed if this many peaks fit it tightly.
+# Real gratings show 8 to 16 such harmonics and tissue shows 1 to 2, so the bar
+# separates a genuine comb from structure the search found by coincidence.
+_MIN_SEED_INLIERS = 3
 _MAX_HARMONIC_ORDER = 24             # orders above this carry no usable grating energy
 _MIN_INLIER_FRACTION = 0.50          # comb weight that must fit the fitted fundamental
 _WEAK_INLIER_FRACTION = 0.80         # below this the comb is contaminated; warn
@@ -157,6 +164,7 @@ def measure_array(image: np.ndarray) -> MeasurementResult:
         concentration=concentration,
         squareness=squareness,
         separation=separation,
+        axis_angle=axes[0][0].angle,
         axis_count=2,
         fundamental_inferred=primary.fundamental_inferred or secondary.fundamental_inferred,
         valid=valid,
@@ -174,6 +182,7 @@ def _build_result(
     concentration: float,
     squareness: float,
     separation: float,
+    axis_angle: float,
     axis_count: int,
     fundamental_inferred: bool,
     valid: bool,
@@ -197,6 +206,7 @@ def _build_result(
         fft_confidence=confidence,
         grid_uniformity=squareness,
         axis_separation_deg=separation,
+        axis_angle_deg=axis_angle,
         axis_count=axis_count,
         spectral_concentration=concentration,
         relative_precision=relative_uncertainty,
@@ -353,34 +363,74 @@ def _solve_axis(axis_peaks: list[_Peak], span: float, cutoff: float) -> _AxisSol
 def _fundamental_seed(
     comb: list[_Peak], span: float, cutoff: float
 ) -> tuple[float, bool]:
-    """Seed the fit with the lowest observed comb frequency.
+    """Choose the fundamental that explains the most comb energy.
 
-    A grating's fundamental is always present in its own spectrum -- a 50% duty
-    cycle suppresses the *even* harmonics, never the first -- so the only way
-    the fundamental can be absent from the observed peaks is if the
-    low-frequency mask removed it. Sub-multiples are therefore considered only
-    when they would land inside that mask, which makes the inference impossible
-    to trigger spuriously on a normally sampled grid.
+    Seeding from the lowest observed frequency makes that one peak a single
+    point of failure. On real frame 2001-_05337.tif a stray peak at 51.47px
+    from diagonal moire banding, 2.51x the true 20.5px pitch, captured the fit:
+    it explained only 46% of the comb, put the strongest peak at harmonic 5,
+    and a perfectly measurable frame was refused.
+
+    A candidate must be supported by several tightly fitting harmonics before
+    it displaces the lowest-frequency default, because a search free to hunt
+    for the best-fitting candidate will otherwise find spurious combs in
+    broadband texture: without that bar, tissue measured 60.3px at 7.67
+    nm/pixel instead of being refused.
+
+    Candidates come from every comb peak over the plausible harmonic orders and
+    are scored on the weighted energy that lands on integer multiples. Scoring
+    uses a much tighter harmonic tolerance than inlier selection does, because
+    coverage alone is not enough: on that same frame a candidate of 19.88px
+    loosely "explained" more energy than the true 20.5px by sweeping up two
+    off-axis diagonal peaks. Requiring a tight fit separates a real comb from a
+    coincidental one; the looser tolerance is then used to gather harmonics
+    once the fundamental is settled.
     """
-    frequencies = sorted(peak.frequency for peak in comb)
-    lowest = frequencies[0]
-    if len(frequencies) < 2 or lowest > cutoff * _MAX_MISSING_FUNDAMENTAL_ORDER:
-        return lowest, False
+    fallback = min(peak.frequency for peak in comb)
+    scored: list[tuple[float, int, float, bool]] = []
 
-    for k in range(2, _MAX_MISSING_FUNDAMENTAL_ORDER + 1):
-        candidate = lowest / k
-        if candidate >= cutoff:
-            continue  # this fundamental would have been visible; it is not missing
-        if 1.0 / candidate > span / _MIN_PERIODS_ACROSS_IMAGE:
-            break  # implied period no longer fits the frame
-        _, orders, fraction = _select_inliers(comb, candidate)
-        if fraction >= _WEAK_INLIER_FRACTION and _greatest_common_order(orders) == 1:
-            return candidate, True
-    return lowest, False
+    for candidate, inferred in _candidate_fundamentals(comb, span, cutoff):
+        inliers, orders, fraction = _select_inliers(
+            comb, candidate, tolerance=_SEED_HARMONIC_TOLERANCE
+        )
+        if len(inliers) < _MIN_SEED_INLIERS or _greatest_common_order(orders) != 1:
+            continue
+        dominant = max(zip(inliers, orders), key=lambda pair: pair[0].magnitude)[1]
+        scored.append((fraction, dominant, candidate, inferred))
+
+    if not scored:
+        return fallback, False
+
+    # Among candidates explaining comparable energy, prefer the one whose
+    # strongest peak sits at the lowest harmonic: a grating's own fundamental
+    # or second harmonic normally dominates its spectrum.
+    best_fraction = max(entry[0] for entry in scored)
+    contenders = [
+        entry for entry in scored if entry[0] >= best_fraction - _FRACTION_TIE_BAND
+    ]
+    _, _, candidate, inferred = min(contenders, key=lambda e: (e[1], -e[0]))
+    return candidate, inferred
+
+
+def _candidate_fundamentals(
+    comb: list[_Peak], span: float, cutoff: float
+):
+    """Every fundamental implied by some comb peak being harmonic n.
+
+    A candidate below the low-frequency mask could not have been observed
+    directly, so taking it means inferring the fundamental from its harmonics.
+    """
+    longest_period = span / _MIN_PERIODS_ACROSS_IMAGE
+    for peak in comb:
+        for order in range(1, _MAX_CANDIDATE_ORDER + 1):
+            candidate = peak.frequency / order
+            if candidate <= 0.0 or 1.0 / candidate > longest_period:
+                break  # higher orders only imply longer periods; stop
+            yield candidate, candidate < cutoff
 
 
 def _select_inliers(
-    comb: list[_Peak], fundamental: float
+    comb: list[_Peak], fundamental: float, tolerance: float = _HARMONIC_TOLERANCE
 ) -> tuple[list[_Peak], list[int], float]:
     """Split the comb into integer multiples of `fundamental` and outliers."""
     if fundamental <= 0.0:
@@ -394,7 +444,7 @@ def _select_inliers(
         total_weight += peak.magnitude
         ratio = peak.frequency / fundamental
         order = round(ratio)
-        if 1 <= order <= _MAX_HARMONIC_ORDER and abs(ratio - order) <= _HARMONIC_TOLERANCE:
+        if 1 <= order <= _MAX_HARMONIC_ORDER and abs(ratio - order) <= tolerance:
             inliers.append(peak)
             orders.append(order)
             inlier_weight += peak.magnitude
@@ -569,6 +619,7 @@ def _single_axis_result(
         concentration=concentration,
         squareness=0.0,
         separation=0.0,
+        axis_angle=axes[0][0].angle,
         axis_count=1,
         fundamental_inferred=solution.fundamental_inferred,
         valid=solution.reliable and _is_valid(solution.spacing, span),

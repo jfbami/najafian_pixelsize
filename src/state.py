@@ -14,6 +14,12 @@ from .models import CachedCalibration, CaseResult
 
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
 
+# Columns added after the first schema shipped, applied to existing databases.
+_ADDED_COLUMNS = (
+    ("cases", "image_width", "INTEGER"),
+    ("cases", "image_height", "INTEGER"),
+)
+
 
 class StateStore:
     def __init__(self, db_path: str):
@@ -23,7 +29,26 @@ class StateStore:
 
     def _initialize_schema(self) -> None:
         self._connection.executescript(_SCHEMA_PATH.read_text())
+        self._add_missing_columns()
         self._connection.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Bring an existing database up to the current schema.
+
+        `CREATE TABLE IF NOT EXISTS` leaves an older table untouched, so a
+        database written before a column was added would fail every insert with
+        `sqlite3.OperationalError: no such column`. Resuming a part-finished run
+        is the whole point of this store, so the upgrade has to be automatic.
+        """
+        for table, column, column_type in _ADDED_COLUMNS:
+            if column not in self._columns_of(table):
+                self._connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"
+                )
+
+    def _columns_of(self, table: str) -> set[str]:
+        rows = self._connection.execute(f"PRAGMA table_info({table})").fetchall()
+        return {row["name"] for row in rows}
 
     def register_pending(self, case_id: str, subfolder_path: str, account_name: str) -> None:
         self._connection.execute(
@@ -66,7 +91,8 @@ class StateStore:
             UPDATE cases SET
                 status = ?, nm_per_pixel = ?, calibration_frame = ?,
                 calibration_source = ?, pixels_per_space = ?, fft_confidence = ?,
-                detector_confidence = ?, magnification = ?, calibration_date = ?,
+                detector_confidence = ?, magnification = ?,
+                image_width = ?, image_height = ?, calibration_date = ?,
                 tissue_date = ?, date_delta_days = ?, agent_notes = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE case_id = ?
@@ -80,6 +106,8 @@ class StateStore:
                 result.fft_confidence,
                 result.detector_confidence,
                 result.magnification,
+                result.image_width,
+                result.image_height,
                 result.calibration_date,
                 result.tissue_date,
                 result.date_delta_days,
