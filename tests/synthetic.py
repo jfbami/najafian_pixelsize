@@ -64,3 +64,35 @@ def write_tiff(image: np.ndarray, path, bit_depth: int = 8):
     else:
         Image.fromarray(image.astype(np.uint8), mode="L").save(path)
     return path
+
+
+def folded_grating(
+    period: float,
+    size: int = 1024,
+    tilt_deg: float = 25.0,
+    fold_from_fraction: float = 0.6,
+    noise: float = 2.0,
+    seed: int = 0,
+) -> np.ndarray:
+    """Cross grating that tilts out of the image plane past a given column.
+
+    Models the real defect: a wrinkled replica foreshortens along the tilt
+    direction only, so the folded region reads short on one axis and stays
+    correct on the other. That anisotropy is what marks a tile as distorted.
+    Everything left of `fold_from_fraction` has exactly `period`.
+    """
+    columns = np.arange(size)
+    ramp = np.clip((columns - size * fold_from_fraction) / 80.0, 0.0, 1.0)
+    foreshortening = 1.0 - (1.0 - math.cos(math.radians(tilt_deg))) * ramp
+    phase_x = np.cumsum(1.0 / (period * foreshortening))
+    phase_y = np.arange(size) / period
+
+    horizontal = np.tile(phase_x, (size, 1))
+    vertical = np.tile(phase_y[:, None], (1, size))
+    image = ((horizontal % 1.0) < 0.5).astype(float)
+    image += ((vertical % 1.0) < 0.5).astype(float)
+    image = 28.0 + 200.0 * (image / image.max())
+    image = gaussian_filter(image, 1.0)
+    if noise:
+        image = image + np.random.default_rng(seed).normal(0.0, noise, image.shape)
+    return np.clip(image, 0.0, 255.0).astype(np.float32)
